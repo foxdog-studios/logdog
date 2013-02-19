@@ -178,7 +178,7 @@ class LogEntryFilter:
             return match(filters, value, True)
         def exclude(filters, value):
             return match(filters, value, False)
-        if LEVEL_NUMS[log_entry.level] < self._log_level_min:
+        if LEVEL_SEVERITY[log_entry.level] < self._log_level_min:
             return False
         tag = log_entry.tag
         if not include(self._include_tags, tag):
