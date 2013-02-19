@@ -147,7 +147,6 @@ class LogEntryFilter:
         self._include_messages = []
         self._exclude_messages = []
 
-
     def log_level_min(self, level):
         self._log_level_min = LEVEL_SEVERITY[level]
 
