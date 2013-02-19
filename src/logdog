@@ -1,0 +1,378 @@
+#!/usr/bin/env python
+
+# Copyright 2013 Foxdog Studios Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from argparse import ArgumentParser
+from collections import OrderedDict
+import fcntl
+import datetime
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import termios
+
+# =============================================================================
+# = Retrieval and parsing                                                     =
+# =============================================================================
+
+ERROR = 'E'
+WARN = 'W'
+INFO = 'I'
+DEBUG = 'D'
+VERBOSE = 'V'
+
+LEVELS = (ERROR, WARN, INFO, DEBUG, VERBOSE)
+
+class DecodedLineReader:
+    def __init__(self, stream):
+        self._stream = stream
+
+    def readline(self):
+        return self._stream.readline().decode()
+
+
+class LogdogManager:
+    ADB_EXECUTABLE = 'adb'
+
+    def __init__(self, adb_path=None):
+        if adb_path is None:
+            adb_path = shutil.which(self.ADB_EXECUTABLE)
+        self._adb_path = adb_path
+        self._logcat = None
+
+    def __enter__(self):
+        if self._logcat is not None:
+            raise ValueError('already managing an instance of logdog')
+        self._logcat = subprocess.Popen((self._adb_path, 'logcat'),
+                                        stdout=subprocess.PIPE)
+        return Logdog(DecodedLineReader(self._logcat.stdout))
+
+    def __exit__(self, type, value, traceback):
+        self._logcat.terminate()
+        self._logcat.wait()
+        self._logcat = None
+
+
+class Logdog:
+    def __init__(self, log_stream):
+        self._log_stream = log_stream
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        while True:
+            line = self._log_stream.readline()
+            if not line:
+                raise StopIteration
+            log_entry = LogEntry.try_from_string(line)
+            if log_entry:
+                return log_entry
+
+
+class LogEntry:
+    RE_LOG_ENTRY = re.compile(r'''
+        ^
+        (?P<level>[EWIDV])
+        /
+        (?P<tag>[^\(]+?)
+        [ ]*\([ ]*
+        (?P<pid>\d+)
+        \):[ ]
+        (?P<message>.*)
+        $
+    ''', re.VERBOSE)
+
+    def __init__(self, pid, tag, level, message, raw=None):
+        self.pid = pid
+        self.tag = tag
+        self.level = level
+        self.message = message
+        self.timestamp = datetime.datetime.now()
+        self.raw = raw
+
+    def __str__(self):
+        return self.tag + ': ' + self.message
+
+    @classmethod
+    def try_from_string(cls, string):
+        match = cls.RE_LOG_ENTRY.match(string)
+        if not match:
+            return None
+        raw_values = match.groupdict()
+        pid = int(raw_values['pid'])
+        tag = raw_values['tag']
+        level = raw_values['level']
+        message = raw_values['message']
+        return cls(pid, tag, level, message, raw=string)
+
+
+# =============================================================================
+# = Filtering                                                                 =
+# =============================================================================
+
+ERROR_SEVERITY = 5
+WARN_SEVERITY = 4
+INFO_SEVERITY = 3
+DEBUG_SEVERITY = 2
+VERBOSE_SEVERITY = 1
+
+LEVEL_SEVERITY = {
+    ERROR: ERROR_SEVERITY,
+    WARN: WARN_SEVERITY,
+    INFO: INFO_SEVERITY,
+    DEBUG: DEBUG_SEVERITY,
+    VERBOSE: VERBOSE_SEVERITY,
+}
+
+class LogEntryFilter:
+    def __init__(self):
+        self._log_level_min = LEVEL_SEVERITY[VERBOSE]
+        self._include_tags = []
+        self._exclude_tags = []
+        self._include_messages = []
+        self._exclude_messages = []
+
+
+    def log_level_min(self, level):
+        self._log_level_min = LEVEL_SEVERITY[level]
+
+    def _add_filter(self, filters, pattern):
+        filters.append(re.compile(pattern).search)
+
+    def include_tag(self, pattern):
+        self._add_filter(self._include_tags, pattern)
+
+    def exclude_tag(self, pattern):
+        self._add_filter(self._exclude_tags, pattern)
+
+    def include_message(self, pattern):
+        self._add_filter(self._include_messages, pattern)
+
+    def exclude_message(self, pattern):
+        self._add_filter(self._exclude_messages, pattern)
+
+    def accept(self, log_entry):
+        def match(filters, value, default):
+            if not filters:
+                return default
+            for filter_ in filters:
+                if filter_(value):
+                    return True
+            return False
+        def include(filters, value):
+            return match(filters, value, True)
+        def exclude(filters, value):
+            return match(filters, value, False)
+        if LEVEL_NUMS[log_entry.level] < self._log_level_min:
+            return False
+        tag = log_entry.tag
+        if not include(self._include_tags, tag):
+            return False
+        if exclude(self._exclude_tags, tag):
+            return False
+        message = log_entry.message
+        if not include(self._include_messages, message):
+            return False
+        if exclude(self._exclude_messages, message):
+            return False
+        return True
+
+
+# =============================================================================
+# = Formatting                                                                =
+# =============================================================================
+
+BLACK = 0
+RED = 1
+GREEN = 2
+YELLOW = 3
+BLUE = 4
+MAGENTA = 5
+CYAN = 6
+WHITE = 7
+
+COLOURS = (RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE)
+
+RESET = '\033[0m'
+
+def get_term_dim():
+    '''Get the width and height of the terminal.'''
+    data = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, '\0\0\0\0')
+    # The dimensions are returned (height, width), so we swap them.
+    return struct.unpack('hh', data)[::-1]
+
+
+def shell_codes(fg=None, bg=None, bright=False, bold=False, dim=False):
+    codes = []
+    if fg is not None:
+        codes.append('3%d' % (fg,))
+    if bg is not None:
+        if bright:
+            codes.append('10%d' % (bg,))
+        else:
+            codes.append('4%d' % (bg,))
+    if bold:
+        codes.append('1')
+    elif dim:
+        codes.append('2')
+    else:
+        codes.append('22')
+    return '\033[%sm' % (';'.join(codes),)
+
+
+def wrap(message, indent, width):
+    current = 0
+    length = len(message)
+    wrap_width = width - indent
+    parts = []
+    line_sep = '\n%s' % (' ' * indent,)
+    while current < length:
+        next = min(current + wrap_width, length)
+        parts.append(message[current:next])
+        if next < length:
+            parts.append(line_sep)
+        current = next
+    return ''.join(parts)
+
+
+class LogEntryFormatter:
+    def __init__(self):
+        def build_level(level, fg, bg):
+            return '%s%s%s' % (
+                shell_codes(fg=fg, bg=bg),
+                level.center(3),
+                RESET,
+            )
+
+        self._levels = {
+            VERBOSE: build_level(VERBOSE, WHITE, BLACK),
+            DEBUG: build_level(DEBUG, BLACK, BLUE),
+            INFO: build_level(INFO, BLACK, GREEN),
+            WARN: build_level(WARN, BLACK, YELLOW),
+            ERROR: build_level(ERROR, BLACK, RED),
+        }
+        self._level_width = 3
+
+        self._tags = {}
+        self._tag_width = 10
+
+        self._header_width = self._level_width + self._tag_width
+
+    def _tag_colour(self, tag):
+        if tag not in self._tags:
+            index = sum(tag.encode()) % len(COLOURS)
+            self._tags[tag] = COLOURS[index]
+        return self._tags[tag]
+
+    def format(self, log_entry):
+        parts = []
+        tag = log_entry.tag[-self._tag_width:].rjust(self._tag_width)
+        colour = self._tag_colour(log_entry.tag)
+        parts.append('%s%s%s' % (shell_codes(fg=colour), tag, RESET))
+        parts.append(self._levels[log_entry.level])
+        message = wrap(log_entry.message, self._header_width,
+                       get_term_dim()[0])
+        parts.append(message)
+        return ''.join(parts)
+
+
+# =============================================================================
+# = Command line and output                                                   =
+# =============================================================================
+
+ERROR_NAME = 'error'
+WARN_NAME = 'warn'
+INFO_NAME = 'info'
+DEBUG_NAME = 'debug'
+VERBOSE_NAME = 'verbose'
+
+LEVEL_NAMES = OrderedDict()
+LEVEL_NAMES[ERROR_NAME] = ERROR
+LEVEL_NAMES[WARN_NAME] = WARN
+LEVEL_NAMES[INFO_NAME] = INFO
+LEVEL_NAMES[DEBUG_NAME] = DEBUG
+LEVEL_NAMES[VERBOSE_NAME] = VERBOSE
+
+def build_argument_parser():
+    parser = ArgumentParser()
+    parser.add_argument('-it', '--include-tag', action='append',
+                        default=[], dest='include_tags')
+    parser.add_argument('-et', '--exclude-tag', action='append',
+                        default=[], dest='exclude_tags')
+    parser.add_argument('-im', '--include-message', action='append',
+                        default=[], dest='include_messages')
+    parser.add_argument('-em', '--exclude-message', action='append',
+                        default=[], dest='exclude_messages')
+    parser.add_argument('-l', '--level', choices=LEVEL_NAMES.keys(),
+                        default=DEBUG_NAME)
+    parser.add_argument('-f', '--file')
+    parser.add_argument('-o', '--output')
+    return parser
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv
+    args = build_argument_parser().parse_args(args=argv[1:])
+
+    lef = LogEntryFilter()
+    lef.log_level_min(LEVEL_NAMES[args.level])
+    for include_tag in args.include_tags:
+        lef.include_tag(include_tag)
+    for exclude_tag in args.exclude_tags:
+        lef.exclude_tag(exclude_tag)
+    for include_message in args.include_messages:
+        lef.include_message(include_message)
+    for exclude_message in args.exclude_messages:
+        lef.exclude_message(exclude_message)
+
+    formatter = LogEntryFormatter()
+
+    def print_log(logdog):
+        output = None
+        try:
+            if args.output:
+                output = open(args.output, 'a')
+            for log_entry in logdog:
+                if output is not None:
+                    output.write(log_entry.raw)
+                if lef.accept(log_entry):
+                    print(formatter.format(log_entry))
+        finally:
+            if output is not None:
+                output.close()
+
+    if args.file is None:
+        with LogdogManager() as logdog:
+            print_log(logdog)
+    elif args.file == '-':
+        print_log(Logdog(sys.stdin))
+    else:
+        with open(args.file) as log_stream:
+            print_log(Logdog(log_stream))
+
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        return_code = main()
+    except KeyboardInterrupt:
+        return_code = 0
+    exit(return_code)
+

@@ -1,0 +1,81 @@
+Logdog
+======
+
+Logdog is a command line utility for viewing the log of an Android device
+(commonly referred to as logcat).
+
+Logdog is licensed under the Apache License, Version 2.0 (see
+`$REPO/LICENSE.txt`).
+
+Installation
+------------
+
+Logdog requires Python 3.3 or later. If you're using Arch Linux, just run
+
+    # $REPO/scripts/setup-arch.sh
+
+Then copy or syslink `$REPO/src/logdog` to a directory on your `$PATH` and
+make sure it's executable
+
+    # chmod +x path/to/logdog
+
+Usage
+-----
+
+View the log
+
+    # logdog
+
+Press `Ctrl+C` to exit.
+
+Get help
+
+    # logdog -h
+
+Show only warnings and errors
+
+    # logdog -l warn
+
+The log levels are, in order of severity:
+
+1. `error`
+2. `warn`
+3. `info`
+4. `debug`
+5. `verbose`
+
+Only entries as or more severe than the given log level will be shown. The
+default is `debug`
+
+Ignore entries with the tag `dalvikvm`
+
+    # logdog -et dalvikvm
+
+`-et` stands for `exclude tag`.
+
+Include only those entries with the tag `dalvikvm`
+
+    # logdog -it dalvikvm
+
+`-it` stands for `include tag`.
+
+Includes and excludes (collectively filters) are Python regular expressions.
+Exclude entries where the message contains at least one numeral
+
+    # logdog -em '\d'
+
+Multiple filters of the same type can be specified. Show only entries where the
+tag is either `dalvikvm` or `power`
+
+    # logdog -it dalvikvm -it power
+
+For a message to be printed, it must be accepted by at least one inclusion
+filter (if any are specified) and rejected by all exclusion filters.
+
+Append entries to a file for inspection later
+
+    # logdog -o device.log
+
+Get entries from a file, instead of a device,
+
+    # logdog -f device.log
