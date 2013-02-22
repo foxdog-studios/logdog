@@ -1,16 +1,16 @@
 Logdog
 ======
 
-Logdog is a command line utility for viewing the log of an Android device
+logdog is a command line utility for viewing the log of an Android device
 (commonly referred to as logcat).
 
-Logdog is licensed under the Apache License, Version 2.0 (see
+logdog is licensed under the Apache License, Version 2.0 (see
 `$REPO/LICENSE.txt`).
 
 Installation
 ------------
 
-Logdog requires Python 3.3 or later. If you're using Arch Linux, just run
+logdog requires Python 3.3 or later. If you're using Arch Linux, just run
 
     # $REPO/scripts/setup-arch.sh
 
