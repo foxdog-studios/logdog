@@ -248,6 +248,8 @@ def wrap(message, indent, width):
 
 class LogEntryFormatter:
     def __init__(self):
+        self.wrap = True
+
         def build_level(level, fg, bg):
             return '%s%s%s' % (
                 shell_codes(fg=fg, bg=bg),
@@ -281,8 +283,10 @@ class LogEntryFormatter:
         colour = self._tag_colour(log_entry.tag)
         parts.append('%s%s%s' % (shell_codes(fg=colour), tag, RESET))
         parts.append(self._levels[log_entry.level])
-        message = wrap(log_entry.message, self._header_width,
-                       get_term_dim()[0])
+        message = log_entry.message
+        if self.wrap:
+            message = wrap(log_entry.message, self._header_width,
+                           get_term_dim()[0])
         parts.append(message)
         return ''.join(parts)
 
@@ -325,6 +329,9 @@ def build_argument_parser():
     parser.add_argument('--hide-unparsable', action='store_false',
                         dest='show_unparsable')
 
+    parser.add_argument('--wrap', action='store_true', default=True)
+    parser.add_argument('--no-wrap', action='store_false', dest='wrap')
+
     parser.add_argument('-f', '--file')
     parser.add_argument('-o', '--output')
 
@@ -348,6 +355,7 @@ def main(argv=None):
         lef.exclude_message(exclude_message)
 
     formatter = LogEntryFormatter()
+    formatter.wrap = args.wrap
 
     def print_log(logdog):
         output = None
