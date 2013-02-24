@@ -75,13 +75,10 @@ class Logdog:
         return self
 
     def __next__(self):
-        while True:
-            line = self._log_stream.readline()
-            if not line:
-                raise StopIteration
-            log_entry = LogEntry.try_from_string(line)
-            if log_entry:
-                return log_entry
+        line = self._log_stream.readline()
+        if not line:
+            raise StopIteration
+        return line
 
 
 class LogEntry:
@@ -323,8 +320,14 @@ def build_argument_parser():
     parser.add_argument('-em', '--exclude-message', action='append',
                         default=[], dest='exclude_messages')
 
+    parser.add_argument('--show-unparsable', action='store_true',
+                        default=False)
+    parser.add_argument('--hide-unparsable', action='store_false',
+                        dest='show_unparsable')
+
     parser.add_argument('-f', '--file')
     parser.add_argument('-o', '--output')
+
     return parser
 
 
@@ -351,11 +354,15 @@ def main(argv=None):
         try:
             if args.output:
                 output = open(args.output, 'a')
-            for log_entry in logdog:
+            for raw_log_entry in logdog:
                 if output is not None:
-                    output.write(log_entry.raw)
-                if lef.accept(log_entry):
-                    print(formatter.format(log_entry))
+                    output.write(raw_log_entry)
+                log_entry = LogEntry.try_from_string(raw_log_entry)
+                if log_entry:
+                    if lef.accept(log_entry):
+                        print(formatter.format(log_entry))
+                elif args.show_unparsable:
+                    print(raw_log_entry)
         finally:
             if output is not None:
                 output.close()
